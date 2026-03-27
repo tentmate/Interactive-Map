@@ -4,6 +4,7 @@ To set up
 1) first create environemnt to prevent global conflict of dependencies
     in parent folder "NTERAVTIVE-MAP" run terminal 
     enter in terminal "python -m venv <venv>" dont include '< >' these are used to indicate a modifiable field, venv is the defualt best practice name for venv (virtual environment folders), but you can name it whatever you like.
+            alt "py -m venv <venv>"
 
 2) to start environment  
     in parent folder "NTERAVTIVE-MAP" run terminal 
@@ -13,9 +14,11 @@ To set up
 3) downlaod dependencies in environment NOTE* 
     with environment running from step 2
     enter in terminal "python -m pip install -r requirements.txt"
+                alt "py -m pip install -r requirements.txt"
 
 4) start app
     following step 3, in terminal run "python app.py"
+                            alt   "py app.py"
 
 5) close app 
     you cannot interactive enter text in terminal at this stage
