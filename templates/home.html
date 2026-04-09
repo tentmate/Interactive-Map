@@ -4,22 +4,53 @@
 {% block content %}
 <div class="layout">
   <section class="panel map-panel">
-    <div class="panel-title">Map</div>
+    <div class="panel-title panel-title-row">
+      <span>Map</span>
+
+      <div class="panel-actions">
+        <button id="clearPinsBtn" class="btn" type="button">Clear Pins</button>
+      </div>
+    </div>
 
     <div class="map-frame">
       <div id="map"></div>
     </div>
 
     <div class="hint">
-      Click on the image to place a pin. Pins appear in the panel on the right.
+      Click on the image to place a pin. Use Move on a pin to place it somewhere else.
     </div>
   </section>
 
-  <section class="panel sidebar">
-    <div class="panel-title">Pins</div>
-    <div id="pinList" class="pin-list">
-      <div class="empty" id="emptyState">No pins yet. Click on the map to create one.</div>
-    </div>
+  <section class="sidebar-stack">
+    <section class="panel sidebar-panel">
+      <div class="panel-title">Current Pins</div>
+      <div id="pinList" class="pin-list">
+        <div class="empty" id="emptyState">No pins yet. Click on the map to create one.</div>
+      </div>
+    </section>
+
+    <section class="panel sidebar-panel">
+      <div class="panel-title">Collections</div>
+
+      <div class="collection-toolbar">
+        <div class="pin-field">
+          <label for="collectionName">Collection Name</label>
+          <input
+            id="collectionName"
+            type="text"
+            placeholder="Enter collection name..."
+          />
+        </div>
+
+        <button id="saveCollectionBtn" class="btn primary" type="button">
+          Save Collection
+        </button>
+      </div>
+
+      <div id="collectionList" class="collection-list">
+        <div class="empty" id="collectionEmptyState">No collections yet.</div>
+      </div>
+    </section>
   </section>
 </div>
 

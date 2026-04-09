@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = "dev-secret-change-me"  # Session key for login state during development
+app.secret_key = "dev-secret-change-me"  # Session key for local development
 
 
 # -------------------------------------------------
-# In-memory data storage
-# This keeps users and pins available while the app
-# is running, but resets when the server restarts.
+# In-memory data models
+# These keep the application state alive while the
+# server is running. Later, these structures can be
+# moved into SQLite tables with very similar fields.
 # -------------------------------------------------
 
 @dataclass
@@ -25,15 +26,26 @@ class Pin:
     description: str
 
 
+@dataclass
+class PinCollection:
+    id: int
+    name: str
+    pins: List[dict]
+
+
 PINS: List[Pin] = []
+COLLECTIONS: List[PinCollection] = []
+
 NEXT_PIN_ID = 1
+NEXT_COLLECTION_ID = 1
 
 USERS: Dict[str, str] = {}  # username -> password_hash
 
 
 # -------------------------------------------------
-# Helper function to get the currently logged-in user
-# from the Flask session.
+# Session helper
+# This returns the current logged-in username, if
+# one exists in the Flask session.
 # -------------------------------------------------
 
 def current_user() -> Optional[str]:
@@ -41,8 +53,34 @@ def current_user() -> Optional[str]:
 
 
 # -------------------------------------------------
+# Serialization helpers
+# These convert Pin objects into plain dictionaries
+# that can be returned as JSON to the front end.
+# -------------------------------------------------
+
+def pin_to_dict(pin: Pin) -> dict:
+    return {
+        "id": pin.id,
+        "x": pin.x,
+        "y": pin.y,
+        "name": pin.name,
+        "color": pin.color,
+        "description": pin.description,
+    }
+
+
+def collection_to_dict(collection: PinCollection) -> dict:
+    return {
+        "id": collection.id,
+        "name": collection.name,
+        "pin_count": len(collection.pins),
+        "pins": collection.pins,
+    }
+
+
+# -------------------------------------------------
 # Page routes
-# These render the main pages of the site.
+# These render the main app pages.
 # -------------------------------------------------
 
 @app.get("/")
@@ -123,24 +161,14 @@ def register_post():
 
 
 # -------------------------------------------------
-# Pin API routes
-# These endpoints let the front end create, read,
-# and update pin data.
+# Current working pin API
+# These endpoints manage the active pins shown on
+# the map and in the top-right pin editor panel.
 # -------------------------------------------------
 
 @app.get("/api/pins")
 def api_pins():
-    return jsonify([
-        {
-            "id": p.id,
-            "x": p.x,
-            "y": p.y,
-            "name": p.name,
-            "color": p.color,
-            "description": p.description,
-        }
-        for p in PINS
-    ])
+    return jsonify([pin_to_dict(p) for p in PINS])
 
 
 @app.post("/api/pins")
@@ -157,49 +185,153 @@ def api_create_pin():
         y=y,
         name=f"Pin {NEXT_PIN_ID}",
         color="gold",
-        description=""
+        description="",
     )
 
     NEXT_PIN_ID += 1
     PINS.append(pin)
 
-    return jsonify({
-        "ok": True,
-        "pin": {
-            "id": pin.id,
-            "x": pin.x,
-            "y": pin.y,
-            "name": pin.name,
-            "color": pin.color,
-            "description": pin.description,
-        }
-    })
+    return jsonify({"ok": True, "pin": pin_to_dict(pin)})
 
 
 @app.patch("/api/pins/<int:pin_id>")
 def api_update_pin(pin_id: int):
     data = request.get_json(force=True)
 
-    for p in PINS:
-        if p.id == pin_id:
+    for pin in PINS:
+        if pin.id == pin_id:
             if "name" in data:
                 new_name = (data.get("name") or "").strip()
                 if not new_name:
                     return jsonify({"ok": False, "error": "Name cannot be empty"}), 400
-                p.name = new_name
+                pin.name = new_name
 
             if "color" in data:
                 new_color = (data.get("color") or "").strip()
                 if not new_color:
                     return jsonify({"ok": False, "error": "Color cannot be empty"}), 400
-                p.color = new_color
+                pin.color = new_color
 
             if "description" in data:
-                p.description = (data.get("description") or "").strip()
+                pin.description = (data.get("description") or "").strip()
 
-            return jsonify({"ok": True})
+            if "x" in data:
+                pin.x = float(data["x"])
+
+            if "y" in data:
+                pin.y = float(data["y"])
+
+            return jsonify({"ok": True, "pin": pin_to_dict(pin)})
 
     return jsonify({"ok": False, "error": "Pin not found"}), 404
+
+
+@app.delete("/api/pins/<int:pin_id>")
+def api_delete_pin(pin_id: int):
+    global PINS
+    original_count = len(PINS)
+    PINS = [pin for pin in PINS if pin.id != pin_id]
+
+    if len(PINS) == original_count:
+        return jsonify({"ok": False, "error": "Pin not found"}), 404
+
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/pins")
+def api_clear_pins():
+    PINS.clear()
+    return jsonify({"ok": True})
+
+
+# -------------------------------------------------
+# Collection API
+# These endpoints save the current active pins into
+# named collections and reload a collection back
+# into the working pin state.
+# -------------------------------------------------
+
+@app.get("/api/collections")
+def api_collections():
+    return jsonify([collection_to_dict(c) for c in COLLECTIONS])
+
+
+@app.post("/api/collections")
+def api_create_collection():
+    global NEXT_COLLECTION_ID
+
+    data = request.get_json(force=True)
+    name = (data.get("name") or "").strip()
+
+    if not name:
+        return jsonify({"ok": False, "error": "Collection name is required"}), 400
+
+    if not PINS:
+        return jsonify({"ok": False, "error": "There are no current pins to save"}), 400
+
+    snapshot = [pin_to_dict(pin) for pin in PINS]
+
+    collection = PinCollection(
+        id=NEXT_COLLECTION_ID,
+        name=name,
+        pins=snapshot,
+    )
+
+    NEXT_COLLECTION_ID += 1
+    COLLECTIONS.append(collection)
+
+    # Clear current working pins after save
+    PINS.clear()
+
+    return jsonify({
+        "ok": True,
+        "collection": collection_to_dict(collection),
+        "pins": [],
+    })
+
+
+@app.patch("/api/collections/<int:collection_id>")
+def api_rename_collection(collection_id: int):
+    data = request.get_json(force=True)
+    new_name = (data.get("name") or "").strip()
+
+    if not new_name:
+        return jsonify({"ok": False, "error": "Collection name cannot be empty"}), 400
+
+    for collection in COLLECTIONS:
+        if collection.id == collection_id:
+            collection.name = new_name
+            return jsonify({"ok": True, "collection": collection_to_dict(collection)})
+
+    return jsonify({"ok": False, "error": "Collection not found"}), 404
+
+
+@app.post("/api/collections/<int:collection_id>/load")
+def api_load_collection(collection_id: int):
+    global NEXT_PIN_ID
+
+    for collection in COLLECTIONS:
+        if collection.id == collection_id:
+            PINS.clear()
+
+            for saved_pin in collection.pins:
+                pin = Pin(
+                    id=NEXT_PIN_ID,
+                    x=float(saved_pin["x"]),
+                    y=float(saved_pin["y"]),
+                    name=saved_pin["name"],
+                    color=saved_pin["color"],
+                    description=saved_pin["description"],
+                )
+                NEXT_PIN_ID += 1
+                PINS.append(pin)
+
+            return jsonify({
+                "ok": True,
+                "pins": [pin_to_dict(pin) for pin in PINS]
+            })
+
+    return jsonify({"ok": False, "error": "Collection not found"}), 404
 
 
 if __name__ == "__main__":
