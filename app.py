@@ -6,11 +6,14 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, s
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = "dev-secret-change-me"  # for sessions (change later)
+app.secret_key = "dev-secret-change-me"  # Session key for login state during development
 
-# -------------------------
-# In-memory "database"
-# -------------------------
+
+# -------------------------------------------------
+# In-memory data storage
+# This keeps users and pins available while the app
+# is running, but resets when the server restarts.
+# -------------------------------------------------
 
 @dataclass
 class Pin:
@@ -18,6 +21,9 @@ class Pin:
     x: float
     y: float
     name: str
+    color: str
+    description: str
+
 
 PINS: List[Pin] = []
 NEXT_PIN_ID = 1
@@ -25,19 +31,22 @@ NEXT_PIN_ID = 1
 USERS: Dict[str, str] = {}  # username -> password_hash
 
 
+# -------------------------------------------------
+# Helper function to get the currently logged-in user
+# from the Flask session.
+# -------------------------------------------------
+
 def current_user() -> Optional[str]:
     return session.get("username")
 
 
-# -------------------------
-# Pages
-# -------------------------
+# -------------------------------------------------
+# Page routes
+# These render the main pages of the site.
+# -------------------------------------------------
 
 @app.get("/")
 def home():
-    # If you want to require login for the home page, uncomment:
-    # if not current_user():
-    #     return redirect(url_for("login"))
     return render_template("home.html", username=current_user())
 
 
@@ -52,11 +61,19 @@ def login_post():
     password = request.form.get("password") or ""
 
     if not username or not password:
-        return render_template("login.html", username=current_user(), error="Please enter username and password.")
+        return render_template(
+            "login.html",
+            username=current_user(),
+            error="Please enter username and password."
+        )
 
     pw_hash = USERS.get(username)
     if not pw_hash or not check_password_hash(pw_hash, password):
-        return render_template("login.html", username=current_user(), error="Invalid username or password.")
+        return render_template(
+            "login.html",
+            username=current_user(),
+            error="Invalid username or password."
+        )
 
     session["username"] = username
     return redirect(url_for("home"))
@@ -80,25 +97,48 @@ def register_post():
     confirm = request.form.get("confirm") or ""
 
     if not username or not password or not confirm:
-        return render_template("register.html", username=current_user(), error="All fields are required.")
+        return render_template(
+            "register.html",
+            username=current_user(),
+            error="All fields are required."
+        )
+
     if password != confirm:
-        return render_template("register.html", username=current_user(), error="Passwords do not match.")
+        return render_template(
+            "register.html",
+            username=current_user(),
+            error="Passwords do not match."
+        )
+
     if username in USERS:
-        return render_template("register.html", username=current_user(), error="Username already exists.")
+        return render_template(
+            "register.html",
+            username=current_user(),
+            error="Username already exists."
+        )
 
     USERS[username] = generate_password_hash(password)
     session["username"] = username
     return redirect(url_for("home"))
 
 
-# -------------------------
-# API for pins
-# -------------------------
+# -------------------------------------------------
+# Pin API routes
+# These endpoints let the front end create, read,
+# and update pin data.
+# -------------------------------------------------
 
 @app.get("/api/pins")
 def api_pins():
     return jsonify([
-        {"id": p.id, "x": p.x, "y": p.y, "name": p.name}
+        {
+            "id": p.id,
+            "x": p.x,
+            "y": p.y,
+            "name": p.name,
+            "color": p.color,
+            "description": p.description,
+        }
         for p in PINS
     ])
 
@@ -111,24 +151,52 @@ def api_create_pin():
     x = float(data["x"])
     y = float(data["y"])
 
-    # default name
-    pin = Pin(id=NEXT_PIN_ID, x=x, y=y, name=f"Pin {NEXT_PIN_ID}")
+    pin = Pin(
+        id=NEXT_PIN_ID,
+        x=x,
+        y=y,
+        name=f"Pin {NEXT_PIN_ID}",
+        color="gold",
+        description=""
+    )
+
     NEXT_PIN_ID += 1
     PINS.append(pin)
 
-    return jsonify({"ok": True, "pin": {"id": pin.id, "x": pin.x, "y": pin.y, "name": pin.name}})
+    return jsonify({
+        "ok": True,
+        "pin": {
+            "id": pin.id,
+            "x": pin.x,
+            "y": pin.y,
+            "name": pin.name,
+            "color": pin.color,
+            "description": pin.description,
+        }
+    })
 
 
 @app.patch("/api/pins/<int:pin_id>")
-def api_rename_pin(pin_id: int):
+def api_update_pin(pin_id: int):
     data = request.get_json(force=True)
-    new_name = (data.get("name") or "").strip()
-    if not new_name:
-        return jsonify({"ok": False, "error": "Name cannot be empty"}), 400
 
     for p in PINS:
         if p.id == pin_id:
-            p.name = new_name
+            if "name" in data:
+                new_name = (data.get("name") or "").strip()
+                if not new_name:
+                    return jsonify({"ok": False, "error": "Name cannot be empty"}), 400
+                p.name = new_name
+
+            if "color" in data:
+                new_color = (data.get("color") or "").strip()
+                if not new_color:
+                    return jsonify({"ok": False, "error": "Color cannot be empty"}), 400
+                p.color = new_color
+
+            if "description" in data:
+                p.description = (data.get("description") or "").strip()
+
             return jsonify({"ok": True})
 
     return jsonify({"ok": False, "error": "Pin not found"}), 404

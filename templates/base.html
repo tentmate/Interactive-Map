@@ -12,11 +12,13 @@
 
 <body>
   <header class="banner">
-    <div class="banner-left">
+    <div class="banner-side banner-left"></div>
+
+    <div class="banner-center">
       <div class="brand">Interactive Map</div>
     </div>
 
-    <div class="banner-right">
+    <div class="banner-side banner-right">
       {% if username %}
         <div class="hello">Hi, {{ username }}</div>
         <a class="btn" href="{{ url_for('logout') }}">Logout</a>

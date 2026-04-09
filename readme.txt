@@ -1,5 +1,7 @@
+=============
+  To set up 
+=============
 
-To set up 
 
 1) first create environemnt to prevent global conflict of dependencies
     in parent folder "NTERAVTIVE-MAP" run terminal 
@@ -26,3 +28,17 @@ To set up
     now you can enter text 
     in terminal enter "deactivate" 
     instance is now closed, the green '(venv)' should be gone
+
+============
+ git stuff
+============
+
+1) set up repository
+
+
+2) update remoe repository with your local changes 
+    git add .                                   will add all saved files
+    git commin -m "<description of changes>"       adds msg for logs
+    git push                                       pushes the change
+
+3)
