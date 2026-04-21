@@ -6,7 +6,7 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, s
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = "dev-secret-change-me"  # Session key for local development
+app.secret_key = "secret-key-go-here"  # Session key for local development
 
 
 # -------------------------------------------------
