@@ -20,7 +20,7 @@ from werkzeug.utils import secure_filename
 from PIL import Image
 
 app = Flask(__name__)
-app.secret_key = "dev-secret-change-me"  # Session key for local development
+app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 
 
 # -------------------------------------------------
