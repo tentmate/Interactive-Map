@@ -372,3 +372,23 @@ textarea:focus {
   color: var(--muted);
   font-size: 14px;
 }
+
+.map-toolbar {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.map-upload-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.map-upload-status {
+  color: var(--muted);
+  font-size: 13px;
+}

@@ -12,47 +12,43 @@
       </div>
     </div>
 
+    <div class="map-toolbar">
+      <form id="mapUploadForm" class="map-upload-form">
+        <input
+          id="mapFileInput"
+          name="map_file"
+          type="file"
+          accept=".png,.jpg,.jpeg,.webp"
+        />
+        <button id="uploadMapBtn" class="btn primary" type="submit">
+          Upload Map
+        </button>
+      </form>
+
+      <div id="mapUploadStatus" class="map-upload-status">
+        Current map: {{ current_map.filename }}
+      </div>
+    </div>
+
     <div class="map-frame">
       <div id="map"></div>
     </div>
 
     <div class="hint">
-      Click on the image to place a pin. Use Move on a pin to place it somewhere else.
+      Uploading a new map clears all current pins. Click on the image to place new pins.
     </div>
   </section>
 
-  <section class="sidebar-stack">
-    <section class="panel sidebar-panel">
-      <div class="panel-title">Current Pins</div>
-      <div id="pinList" class="pin-list">
-        <div class="empty" id="emptyState">No pins yet. Click on the map to create one.</div>
-      </div>
-    </section>
-
-    <section class="panel sidebar-panel">
-      <div class="panel-title">Collections</div>
-
-      <div class="collection-toolbar">
-        <div class="pin-field">
-          <label for="collectionName">Collection Name</label>
-          <input
-            id="collectionName"
-            type="text"
-            placeholder="Enter collection name..."
-          />
-        </div>
-
-        <button id="saveCollectionBtn" class="btn primary" type="button">
-          Save Collection
-        </button>
-      </div>
-
-      <div id="collectionList" class="collection-list">
-        <div class="empty" id="collectionEmptyState">No collections yet.</div>
-      </div>
-    </section>
+  <section class="panel sidebar">
+    <div class="panel-title">Current Pins</div>
+    <div id="pinList" class="pin-list">
+      <div class="empty" id="emptyState">No pins yet. Click on the map to create one.</div>
+    </div>
   </section>
 </div>
 
+<script>
+  window.CURRENT_MAP = JSON.parse('{{ current_map | tojson | safe }}');
+</script>
 <script defer src="{{ url_for('static', filename='app.js') }}"></script>
 {% endblock %}

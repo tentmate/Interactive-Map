@@ -1,66 +1,78 @@
 // -------------------------------------------------
-// Image map configuration
-// These values define the image file and its real
-// pixel dimensions for Leaflet's simple coordinate
-// system.
+// Current map state
+// This starts from the server-rendered map metadata
+// and can be replaced when the user uploads a new
+// image file.
 // -------------------------------------------------
 
-const IMAGE_URL = "/static/eldenringmap.jpg";
-const IMAGE_WIDTH = 6780;
-const IMAGE_HEIGHT = 7049;
+let currentMap = window.CURRENT_MAP;
 
-
-// -------------------------------------------------
-// Leaflet map setup
-// CRS.Simple makes the map use pixel-style image
-// coordinates. maxBounds locks the map so it stays
-// inside its visible frame instead of drifting into
-// empty space.
-// -------------------------------------------------
-
-const bounds = [[0, 0], [IMAGE_HEIGHT, IMAGE_WIDTH]];
-
-const map = L.map("map", {
-  crs: L.CRS.Simple,
-  minZoom: -5,
-  maxZoom: 2,
-  maxBounds: bounds,
-  maxBoundsViscosity: 1.0,
-});
-
-L.imageOverlay(IMAGE_URL, bounds).addTo(map);
-map.fitBounds(bounds);
-
-setTimeout(() => {
-  map.invalidateSize();
-  map.fitBounds(bounds);
-}, 100);
-
-
-// -------------------------------------------------
-// Front-end state
-// These variables keep track of the visible markers,
-// current moving pin mode, and the sidebar elements.
-// -------------------------------------------------
-
-const markerById = new Map();
+let map = null;
+let imageOverlay = null;
 let movingPinId = null;
+const markerById = new Map();
 
 const pinList = document.getElementById("pinList");
 const emptyState = document.getElementById("emptyState");
-
-const collectionList = document.getElementById("collectionList");
-const collectionEmptyState = document.getElementById("collectionEmptyState");
-const collectionNameInput = document.getElementById("collectionName");
-
 const clearPinsBtn = document.getElementById("clearPinsBtn");
-const saveCollectionBtn = document.getElementById("saveCollectionBtn");
+
+const mapUploadForm = document.getElementById("mapUploadForm");
+const mapFileInput = document.getElementById("mapFileInput");
+const mapUploadStatus = document.getElementById("mapUploadStatus");
 
 
 // -------------------------------------------------
-// Marker creation and updates
-// These helpers create colored custom markers and
-// keep their icons and popup content in sync.
+// Map setup helpers
+// These create or rebuild the Leaflet image map
+// based on the current image URL and dimensions.
+// -------------------------------------------------
+
+function getMapBounds() {
+  return [[0, 0], [currentMap.height, currentMap.width]];
+}
+
+function destroyExistingMap() {
+  if (map) {
+    map.remove();
+    map = null;
+  }
+  imageOverlay = null;
+  markerById.clear();
+}
+
+function initializeMap() {
+  const bounds = getMapBounds();
+
+  map = L.map("map", {
+    crs: L.CRS.Simple,
+    minZoom: -5,
+    maxZoom: 2,
+    maxBounds: bounds,
+    maxBoundsViscosity: 1.0,
+  });
+
+  imageOverlay = L.imageOverlay(currentMap.url, bounds).addTo(map);
+  map.fitBounds(bounds);
+
+  setTimeout(() => {
+    map.invalidateSize();
+    map.fitBounds(bounds);
+  }, 100);
+
+  map.on("click", handleMapClick);
+}
+
+function rebuildMap() {
+  exitMoveMode();
+  destroyExistingMap();
+  initializeMap();
+}
+
+
+// -------------------------------------------------
+// Marker helpers
+// These create, update, and remove colored markers
+// so the map and sidebar stay in sync.
 // -------------------------------------------------
 
 function createMarkerIcon(color) {
@@ -114,9 +126,9 @@ function clearAllMarkers() {
 
 
 // -------------------------------------------------
-// Cursor and move mode
-// This turns the map cursor into a colored pin-like
-// marker while the user is choosing a new position.
+// Move-mode helpers
+// These let the user click Move on a pin, then place
+// it somewhere else on the map with a colored cursor.
 // -------------------------------------------------
 
 function buildMoveCursor(color) {
@@ -130,12 +142,16 @@ function buildMoveCursor(color) {
 
 function setMoveCursor(color) {
   const mapEl = document.getElementById("map");
-  mapEl.style.cursor = buildMoveCursor(color);
+  if (mapEl) {
+    mapEl.style.cursor = buildMoveCursor(color);
+  }
 }
 
 function resetMapCursor() {
   const mapEl = document.getElementById("map");
-  mapEl.style.cursor = "";
+  if (mapEl) {
+    mapEl.style.cursor = "";
+  }
 }
 
 function exitMoveMode() {
@@ -151,18 +167,13 @@ function exitMoveMode() {
 
 // -------------------------------------------------
 // Shared UI helpers
-// These toggle empty messages and rebuild the pin
-// and collection panels after backend changes.
+// These manage sidebar empty states and pin card
+// rendering for the current working pins.
 // -------------------------------------------------
 
 function setEmptyStateVisible(visible) {
   if (!emptyState) return;
   emptyState.style.display = visible ? "block" : "none";
-}
-
-function setCollectionEmptyStateVisible(visible) {
-  if (!collectionEmptyState) return;
-  collectionEmptyState.style.display = visible ? "block" : "none";
 }
 
 function clearPinUI() {
@@ -171,18 +182,27 @@ function clearPinUI() {
   setEmptyStateVisible(true);
 }
 
-function clearCollectionUI() {
-  collectionList.innerHTML = "";
-  collectionList.appendChild(collectionEmptyState);
-  setCollectionEmptyStateVisible(true);
+function replaceCurrentPins(pins) {
+  exitMoveMode();
+  clearAllMarkers();
+  clearPinUI();
+
+  if (!pins.length) {
+    setEmptyStateVisible(true);
+    return;
+  }
+
+  pins.forEach((pin) => {
+    addMarker(pin);
+    addPinToUI(pin);
+  });
 }
 
 
 // -------------------------------------------------
 // API helpers
-// These keep fetch logic centralized so all create,
-// update, delete, save, and load actions behave
-// consistently.
+// These wrap the backend calls for pins and map
+// upload so the UI logic stays cleaner.
 // -------------------------------------------------
 
 async function patchPin(pinId, payload) {
@@ -226,55 +246,34 @@ async function clearPins() {
   return data;
 }
 
-async function createCollection(name) {
-  const res = await fetch("/api/collections", {
+async function uploadMapFile(file) {
+  const formData = new FormData();
+  formData.append("map_file", file);
+
+  const res = await fetch("/api/map/upload", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: formData,
   });
 
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.error || "Collection save failed");
+    throw new Error(data.error || "Map upload failed");
   }
 
   return data;
 }
 
-async function renameCollection(collectionId, name) {
-  const res = await fetch(`/api/collections/${collectionId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error || "Collection rename failed");
-  }
-
-  return data;
-}
-
-async function loadCollectionById(collectionId) {
-  const res = await fetch(`/api/collections/${collectionId}/load`, {
-    method: "POST",
-  });
-
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error || "Collection load failed");
-  }
-
-  return data;
+async function loadPins() {
+  const res = await fetch("/api/pins");
+  const pins = await res.json();
+  replaceCurrentPins(pins);
 }
 
 
 // -------------------------------------------------
 // Pin card builder
-// This creates one editable card for each current
-// working pin, including rename, color, description,
-// remove, and move actions.
+// This creates one sidebar card for a pin, including
+// rename, color, description, remove, and move.
 // -------------------------------------------------
 
 function makePinCard(pin) {
@@ -450,130 +449,20 @@ function makePinCard(pin) {
   return card;
 }
 
-
-// -------------------------------------------------
-// Collection card builder
-// This creates one saved collection card. Clicking
-// the card loads its pins into the working area,
-// while clicking the name lets the user rename it.
-// -------------------------------------------------
-
-function makeCollectionCard(collection) {
-  const card = document.createElement("div");
-  card.className = "collection-card";
-  card.dataset.collectionId = String(collection.id);
-
-  const row = document.createElement("div");
-  row.className = "collection-row";
-
-  const nameEl = document.createElement("div");
-  nameEl.className = "collection-name";
-  nameEl.textContent = collection.name;
-
-  nameEl.addEventListener("click", async (event) => {
-    event.stopPropagation();
-
-    const newName = prompt("Rename this collection:", collection.name);
-    if (newName === null) return;
-
-    const trimmed = newName.trim();
-    if (!trimmed) return;
-
-    try {
-      const data = await renameCollection(collection.id, trimmed);
-      collection.name = data.collection.name;
-      nameEl.textContent = collection.name;
-    } catch (err) {
-      alert(err.message);
-    }
-  });
-
-  row.appendChild(nameEl);
-  card.appendChild(row);
-
-  const meta = document.createElement("div");
-  meta.className = "collection-meta";
-  meta.textContent = `${collection.pin_count} pin(s) saved`;
-  card.appendChild(meta);
-
-  card.addEventListener("click", async () => {
-    try {
-      const data = await loadCollectionById(collection.id);
-      replaceCurrentPins(data.pins);
-    } catch (err) {
-      alert(err.message);
-    }
-  });
-
-  return card;
-}
-
-
-// -------------------------------------------------
-// Panel rendering
-// These functions rebuild the current pins section
-// and collection section from the latest data.
-// -------------------------------------------------
-
 function addPinToUI(pin) {
   setEmptyStateVisible(false);
   const card = makePinCard(pin);
   pinList.appendChild(card);
 }
 
-function addCollectionToUI(collection) {
-  setCollectionEmptyStateVisible(false);
-  const card = makeCollectionCard(collection);
-  collectionList.appendChild(card);
-}
-
-function replaceCurrentPins(pins) {
-  exitMoveMode();
-  clearAllMarkers();
-  clearPinUI();
-
-  if (!pins.length) {
-    setEmptyStateVisible(true);
-    return;
-  }
-
-  pins.forEach((pin) => {
-    addMarker(pin);
-    addPinToUI(pin);
-  });
-}
-
-async function loadPins() {
-  const res = await fetch("/api/pins");
-  const pins = await res.json();
-  replaceCurrentPins(pins);
-}
-
-async function loadCollections() {
-  const res = await fetch("/api/collections");
-  const collections = await res.json();
-
-  clearCollectionUI();
-
-  if (!collections.length) {
-    setCollectionEmptyStateVisible(true);
-    return;
-  }
-
-  collections.forEach((collection) => {
-    addCollectionToUI(collection);
-  });
-}
-
 
 // -------------------------------------------------
 // Map click behavior
-// A normal click creates a new pin. If move mode is
-// active, the click repositions the selected pin
-// instead of creating a new one.
+// Normal clicks create a pin. If move mode is on,
+// the next click repositions the selected pin.
 // -------------------------------------------------
 
-map.on("click", async (event) => {
+async function handleMapClick(event) {
   const y = event.latlng.lat;
   const x = event.latlng.lng;
 
@@ -613,13 +502,13 @@ map.on("click", async (event) => {
 
   addMarker(data.pin);
   addPinToUI(data.pin);
-});
+}
 
 
 // -------------------------------------------------
 // Toolbar actions
-// These buttons clear the current working pins or
-// save the current working pins into a collection.
+// These support clearing current pins and uploading
+// a new map image, which resets the current pin set.
 // -------------------------------------------------
 
 clearPinsBtn.addEventListener("click", async () => {
@@ -633,24 +522,27 @@ clearPinsBtn.addEventListener("click", async () => {
   }
 });
 
-saveCollectionBtn.addEventListener("click", async () => {
-  const name = collectionNameInput.value.trim();
+mapUploadForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
 
-  if (!name) {
-    alert("Please enter a collection name.");
+  const file = mapFileInput.files[0];
+  if (!file) {
+    alert("Please choose an image file first.");
     return;
   }
 
   try {
-    const data = await createCollection(name);
+    mapUploadStatus.textContent = "Uploading map...";
+    const data = await uploadMapFile(file);
 
-    collectionNameInput.value = "";
-    addCollectionToUI(data.collection);
+    currentMap = data.map;
+    mapUploadStatus.textContent = `Current map: ${currentMap.filename}`;
 
-    exitMoveMode();
-    clearAllMarkers();
+    rebuildMap();
     clearPinUI();
+    mapFileInput.value = "";
   } catch (err) {
+    mapUploadStatus.textContent = "Upload failed.";
     alert(err.message);
   }
 });
@@ -658,9 +550,9 @@ saveCollectionBtn.addEventListener("click", async () => {
 
 // -------------------------------------------------
 // Start-up
-// These initial calls populate the page with the
-// current working pins and any saved collections.
+// These initialize the image map and restore any
+// current working pins from the backend.
 // -------------------------------------------------
 
+initializeMap();
 loadPins();
-loadCollections();

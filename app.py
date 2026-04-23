@@ -1,19 +1,45 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Dict, List, Optional
-from flask import Flask, render_template, request, jsonify, redirect, url_for, session
+from pathlib import Path
+from uuid import uuid4
+
+from flask import (
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    redirect,
+    url_for,
+    session,
+    send_from_directory,
+)
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
+from PIL import Image
 
 app = Flask(__name__)
-app.secret_key = "secret-key-go-here"  # Session key for local development
+app.secret_key = "dev-secret-change-me"  # Session key for local development
+
+
+# -------------------------------------------------
+# File upload configuration
+# These settings define where uploaded map images
+# are stored and which file types are allowed.
+# -------------------------------------------------
+
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_FOLDER = BASE_DIR / "uploads"
+UPLOAD_FOLDER.mkdir(exist_ok=True)
+
+ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 
 
 # -------------------------------------------------
 # In-memory data models
-# These keep the application state alive while the
-# server is running. Later, these structures can be
-# moved into SQLite tables with very similar fields.
+# These keep the current working state of the app
+# while the Flask server is running.
 # -------------------------------------------------
 
 @dataclass
@@ -26,37 +52,36 @@ class Pin:
     description: str
 
 
-@dataclass
-class PinCollection:
-    id: int
-    name: str
-    pins: List[dict]
-
-
 PINS: List[Pin] = []
-COLLECTIONS: List[PinCollection] = []
-
 NEXT_PIN_ID = 1
-NEXT_COLLECTION_ID = 1
 
 USERS: Dict[str, str] = {}  # username -> password_hash
 
 
 # -------------------------------------------------
-# Session helper
-# This returns the current logged-in username, if
-# one exists in the Flask session.
+# Current map state
+# This stores which image is currently being used
+# as the active map, along with its pixel size.
+# -------------------------------------------------
+
+CURRENT_MAP = {
+    "filename": "eldenringmap.jpg",
+    "url": "/static/eldenringmap.jpg",
+    "width": 6780,
+    "height": 7049,
+    "source": "static",
+}
+
+
+# -------------------------------------------------
+# Helper utilities
+# These functions keep small repeated logic out of
+# the route handlers.
 # -------------------------------------------------
 
 def current_user() -> Optional[str]:
     return session.get("username")
 
-
-# -------------------------------------------------
-# Serialization helpers
-# These convert Pin objects into plain dictionaries
-# that can be returned as JSON to the front end.
-# -------------------------------------------------
 
 def pin_to_dict(pin: Pin) -> dict:
     return {
@@ -69,23 +94,26 @@ def pin_to_dict(pin: Pin) -> dict:
     }
 
 
-def collection_to_dict(collection: PinCollection) -> dict:
-    return {
-        "id": collection.id,
-        "name": collection.name,
-        "pin_count": len(collection.pins),
-        "pins": collection.pins,
-    }
+def allowed_image_file(filename: str) -> bool:
+    if "." not in filename:
+        return False
+
+    ext = filename.rsplit(".", 1)[1].lower()
+    return ext in ALLOWED_IMAGE_EXTENSIONS
 
 
 # -------------------------------------------------
 # Page routes
-# These render the main app pages.
+# These render the visible HTML pages.
 # -------------------------------------------------
 
 @app.get("/")
 def home():
-    return render_template("home.html", username=current_user())
+    return render_template(
+        "home.html",
+        username=current_user(),
+        current_map=CURRENT_MAP,
+    )
 
 
 @app.get("/login")
@@ -161,14 +189,85 @@ def register_post():
 
 
 # -------------------------------------------------
-# Current working pin API
-# These endpoints manage the active pins shown on
-# the map and in the top-right pin editor panel.
+# Uploaded map serving route
+# This lets the browser load user-uploaded files
+# from the uploads folder.
+# -------------------------------------------------
+
+@app.get("/uploads/<path:filename>")
+def uploaded_file(filename: str):
+    return send_from_directory(UPLOAD_FOLDER, filename)
+
+
+# -------------------------------------------------
+# Map API routes
+# These provide the current map metadata and let the
+# user upload a new map image. Uploading a new map
+# clears all current pins by design.
+# -------------------------------------------------
+
+@app.get("/api/map")
+def api_get_map():
+    return jsonify(CURRENT_MAP)
+
+
+@app.post("/api/map/upload")
+def api_upload_map():
+    global NEXT_PIN_ID
+
+    if "map_file" not in request.files:
+        return jsonify({"ok": False, "error": "No file was uploaded."}), 400
+
+    file = request.files["map_file"]
+
+    if not file or not file.filename:
+        return jsonify({"ok": False, "error": "No file was selected."}), 400
+
+    if not allowed_image_file(file.filename):
+        return jsonify({"ok": False, "error": "Unsupported file type."}), 400
+
+    safe_name = secure_filename(file.filename)
+    ext = safe_name.rsplit(".", 1)[1].lower()
+    unique_name = f"{uuid4().hex}.{ext}"
+    saved_path = UPLOAD_FOLDER / unique_name
+
+    file.save(saved_path)
+
+    try:
+        with Image.open(saved_path) as img:
+            width, height = img.size
+    except Exception:
+        saved_path.unlink(missing_ok=True)
+        return jsonify({"ok": False, "error": "Could not read image dimensions."}), 400
+
+    CURRENT_MAP["filename"] = unique_name
+    CURRENT_MAP["url"] = f"/uploads/{unique_name}"
+    CURRENT_MAP["width"] = width
+    CURRENT_MAP["height"] = height
+    CURRENT_MAP["source"] = "upload"
+
+    # Option A behavior:
+    # when a new map is uploaded, all current pins are erased
+    PINS.clear()
+    NEXT_PIN_ID = 1
+
+    return jsonify({
+        "ok": True,
+        "message": "Map uploaded successfully. Current pins were cleared.",
+        "map": CURRENT_MAP,
+        "pins": [],
+    })
+
+
+# -------------------------------------------------
+# Pin API routes
+# These manage the active working pins shown on the
+# current map and in the pin sidebar.
 # -------------------------------------------------
 
 @app.get("/api/pins")
 def api_pins():
-    return jsonify([pin_to_dict(p) for p in PINS])
+    return jsonify([pin_to_dict(pin) for pin in PINS])
 
 
 @app.post("/api/pins")
@@ -240,98 +339,10 @@ def api_delete_pin(pin_id: int):
 
 @app.delete("/api/pins")
 def api_clear_pins():
-    PINS.clear()
-    return jsonify({"ok": True})
-
-
-# -------------------------------------------------
-# Collection API
-# These endpoints save the current active pins into
-# named collections and reload a collection back
-# into the working pin state.
-# -------------------------------------------------
-
-@app.get("/api/collections")
-def api_collections():
-    return jsonify([collection_to_dict(c) for c in COLLECTIONS])
-
-
-@app.post("/api/collections")
-def api_create_collection():
-    global NEXT_COLLECTION_ID
-
-    data = request.get_json(force=True)
-    name = (data.get("name") or "").strip()
-
-    if not name:
-        return jsonify({"ok": False, "error": "Collection name is required"}), 400
-
-    if not PINS:
-        return jsonify({"ok": False, "error": "There are no current pins to save"}), 400
-
-    snapshot = [pin_to_dict(pin) for pin in PINS]
-
-    collection = PinCollection(
-        id=NEXT_COLLECTION_ID,
-        name=name,
-        pins=snapshot,
-    )
-
-    NEXT_COLLECTION_ID += 1
-    COLLECTIONS.append(collection)
-
-    # Clear current working pins after save
-    PINS.clear()
-
-    return jsonify({
-        "ok": True,
-        "collection": collection_to_dict(collection),
-        "pins": [],
-    })
-
-
-@app.patch("/api/collections/<int:collection_id>")
-def api_rename_collection(collection_id: int):
-    data = request.get_json(force=True)
-    new_name = (data.get("name") or "").strip()
-
-    if not new_name:
-        return jsonify({"ok": False, "error": "Collection name cannot be empty"}), 400
-
-    for collection in COLLECTIONS:
-        if collection.id == collection_id:
-            collection.name = new_name
-            return jsonify({"ok": True, "collection": collection_to_dict(collection)})
-
-    return jsonify({"ok": False, "error": "Collection not found"}), 404
-
-
-@app.post("/api/collections/<int:collection_id>/load")
-def api_load_collection(collection_id: int):
     global NEXT_PIN_ID
-
-    for collection in COLLECTIONS:
-        if collection.id == collection_id:
-            PINS.clear()
-
-            for saved_pin in collection.pins:
-                pin = Pin(
-                    id=NEXT_PIN_ID,
-                    x=float(saved_pin["x"]),
-                    y=float(saved_pin["y"]),
-                    name=saved_pin["name"],
-                    color=saved_pin["color"],
-                    description=saved_pin["description"],
-                )
-                NEXT_PIN_ID += 1
-                PINS.append(pin)
-
-            return jsonify({
-                "ok": True,
-                "pins": [pin_to_dict(pin) for pin in PINS]
-            })
-
-    return jsonify({"ok": False, "error": "Collection not found"}), 404
+    PINS.clear()
+    NEXT_PIN_ID = 1
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
