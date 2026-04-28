@@ -20,6 +20,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from PIL import Image
 
+# Max number of pixels for the uploaded image
+Image.MAX_IMAGE_PIXELS = 300_000_000
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 
